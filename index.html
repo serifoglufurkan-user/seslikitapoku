@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>Sesli Kitap</title>
-  <!-- PDF.js -->
+  <title>Sesli Kitap v2.1</title>
+  <!-- PDF Okuyucu -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
-  <!-- JSZip (EPUB açmak için en hızlı ve kararlı yöntem) -->
+  <!-- EPUB Arşiv Açıcı -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <style>
     :root {
@@ -84,11 +84,21 @@
       color: var(--muted);
       text-align: center;
     }
+    .badge {
+      font-size: 11px;
+      background: #2c2c2e;
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: #30d158;
+      display: inline-block;
+      margin-bottom: 6px;
+    }
   </style>
 </head>
 <body>
 
 <header>
+  <div><span class="badge">Sürüm: EPUB + PDF Destekli (v2.1)</span></div>
   <input type="file" id="filePicker" class="file-input" accept=".pdf,.epub">
   <div class="status" id="bookTitle">Lütfen bir PDF veya EPUB seçin</div>
 </header>
@@ -135,25 +145,26 @@
     stopAudio();
     currentBookId = file.name;
     bookTitleEl.innerText = file.name;
-    contentEl.innerText = "Dosya ayrıştırılıyor, lütfen bekleyin...";
+    contentEl.innerText = "Dosya türü algılanıyor ve ayrıştırılıyor...";
 
     try {
       let extractedText = "";
-      const fileNameLower = file.name.toLowerCase();
+      const lowerName = file.name.toLowerCase();
 
-      if (fileNameLower.endsWith('.epub')) {
+      // Kesin dosya tipi ayrımı
+      if (lowerName.endsWith('.epub')) {
         extractedText = await parseEPUB(file);
-      } else if (fileNameLower.endsWith('.pdf')) {
+      } else if (lowerName.endsWith('.pdf')) {
         extractedText = await parsePDF(file);
       } else {
-        contentEl.innerText = "Hata: Yalnızca .pdf veya .epub formatları desteklenmektedir.";
+        contentEl.innerText = "Hata: Seçilen dosya .pdf veya .epub formatında değil!";
         return;
       }
 
       extractedText = extractedText.normalize('NFC');
 
       if (!extractedText.trim()) {
-        contentEl.innerText = "HATA: Dosyadan metin okunamadı.";
+        contentEl.innerText = "HATA: Dosyada okunabilir metin bulunamadı.";
         return;
       }
 
@@ -172,43 +183,47 @@
 
     } catch (err) {
       console.error(err);
-      contentEl.innerText = "Dosya açılırken hata oluştu: " + err.message;
+      contentEl.innerText = "Hata oluştu (" + file.name + "): " + err.message;
     }
   });
 
-  // Doğrudan JSZip ile HTML/XHTML bölümlerini çıkarma (Hatayı tamamen çözer)
   async function parseEPUB(file) {
     contentEl.innerText = "EPUB arşivi açılıyor...";
+    if (typeof JSZip === 'undefined') {
+      throw new Error("JSZip kütüphanesi yüklenemedi. İnternet bağlantınızı kontrol edin.");
+    }
+    
     const zip = await JSZip.loadAsync(file);
     let fullText = "";
-    
-    // EPUB içerisindeki metin dosyalarını bul (.html veya .xhtml)
     const textFiles = [];
-    zip.forEach((relativePath, zipEntry) => {
-      const lower = relativePath.toLowerCase();
-      if ((lower.endsWith('.html') || lower.endsWith('.xhtml') || lower.endsWith('.htm')) && !lower.includes('toc')) {
-        textFiles.push(zipEntry);
+
+    zip.forEach((path, entry) => {
+      const p = path.toLowerCase();
+      if ((p.endsWith('.html') || p.endsWith('.xhtml') || p.endsWith('.htm')) && !p.includes('toc') && !p.includes('nav')) {
+        textFiles.push(entry);
       }
     });
 
-    // Dosyaları isimlerine göre sırala
+    if (textFiles.length === 0) {
+      // Eğer filtre çok kısıtlı kaldıysa tüm html'leri al
+      zip.forEach((path, entry) => {
+        const p = path.toLowerCase();
+        if (p.endsWith('.html') || p.endsWith('.xhtml') || p.endsWith('.htm')) {
+          textFiles.push(entry);
+        }
+      });
+    }
+
     textFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 
     for (let i = 0; i < textFiles.length; i++) {
       contentEl.innerText = `EPUB okunuyor: ${i + 1} / ${textFiles.length}...`;
       const htmlStr = await textFiles[i].async("string");
-      
-      // HTML etiketlerini temizle
       const parser = new DOMParser();
       const doc = parser.parseFromString(htmlStr, 'text/html');
-      
-      // script ve style etiketlerini kaldır
       doc.querySelectorAll('script, style').forEach(el => el.remove());
-      
-      const cleanText = doc.body ? (doc.body.innerText || doc.body.textContent) : "";
-      if (cleanText) {
-        fullText += cleanText + "\n";
-      }
+      const clean = doc.body ? (doc.body.innerText || doc.body.textContent) : "";
+      if (clean) fullText += clean + "\n";
     }
 
     return fullText;
@@ -224,7 +239,7 @@
     const totalPages = pdf.numPages;
 
     for (let i = 1; i <= totalPages; i++) {
-      contentEl.innerText = `PDF Sayfa işleniyor: ${i} / ${totalPages}...`;
+      contentEl.innerText = `PDF Sayfa: ${i} / ${totalPages}...`;
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
       const pageText = textContent.items.map(item => item.str).join(' ');
@@ -281,7 +296,7 @@
       isPlaying = true;
       updateUI();
     }).catch(err => {
-      console.warn("Harici motor çalınamadı, yerel deneniyor:", err);
+      console.warn("Harici motor hatası, yerel motor deneniyor:", err);
       fallbackSpeak(currentSentence);
     });
   }
@@ -289,22 +304,16 @@
   audioPlayer.onended = () => {
     if (isPlaying) {
       currentIndex++;
-      if (currentIndex < sentences.length) {
-        playCurrent();
-      } else {
-        stopAudio();
-      }
+      if (currentIndex < sentences.length) playCurrent();
+      else stopAudio();
     }
   };
 
   audioPlayer.onerror = () => {
     if (isPlaying) {
       currentIndex++;
-      if (currentIndex < sentences.length) {
-        playCurrent();
-      } else {
-        stopAudio();
-      }
+      if (currentIndex < sentences.length) playCurrent();
+      else stopAudio();
     }
   };
 
@@ -333,11 +342,8 @@
   }
 
   playBtn.addEventListener('click', () => {
-    if (isPlaying) {
-      stopAudio();
-    } else {
-      playCurrent();
-    }
+    if (isPlaying) stopAudio();
+    else playCurrent();
   });
 
   prevBtn.addEventListener('click', () => {
