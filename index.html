@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Sesli Kitap</title>
-  <!-- Kararlı ve bağımsız PDF.js sürümü -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
   <style>
     :root {
@@ -103,7 +102,6 @@
 </div>
 
 <script>
-  // Worker yükleme hatalarını önlemek için worker yolunu doğrudan kütüphaneden bağlayalım
   if (window['pdfjs-dist/build/pdf']) {
     window.pdfjsLib = window['pdfjs-dist/build/pdf'];
   }
@@ -117,6 +115,17 @@
   let isPlaying = false;
   const synth = window.speechSynthesis;
   let utterance = null;
+  let turkishVoice = null;
+
+  // Cihazdaki Türkçe ses motorunu tespit et ve seç
+  function loadVoices() {
+    const voices = synth.getVoices();
+    turkishVoice = voices.find(v => v.lang.includes('tr') || v.lang.includes('TR'));
+  }
+  loadVoices();
+  if (speechSynthesis.onvoiceschanged !== undefined) {
+    speechSynthesis.onvoiceschanged = loadVoices;
+  }
 
   const filePicker = document.getElementById('filePicker');
   const contentEl = document.getElementById('content');
@@ -153,24 +162,20 @@
         extractedText += pageText + "\n";
       }
 
+      // Metni Unicode standartlarına göre düzelt ve temizle
+      extractedText = extractedText.normalize('NFC');
+
       if (!extractedText.trim()) {
-        contentEl.innerText = "HATA: Bu PDF belgesinde okunabilir metin bulunamadı. Belge taranmış resimlerden (fotoğraflardan) oluşuyor olabilir.";
+        contentEl.innerText = "HATA: Okunabilir metin bulunamadı.";
         return;
       }
 
-      // Cümlelere bölme işlemi
       sentences = extractedText
         .replace(/([.?!])\s*(?=[A-ZĞÜŞİÖÇa-zğüşıöç0-9])/g, "$1|")
         .split("|")
         .map(s => s.trim())
         .filter(s => s.length > 2);
 
-      if (sentences.length === 0) {
-        contentEl.innerText = "Metin bulundu fakat cümleler ayrıştırılamadı.";
-        return;
-      }
-
-      // Kaldığı yeri hafızadan al
       const savedIndex = localStorage.getItem('progress_' + currentBookId);
       currentIndex = savedIndex ? parseInt(savedIndex, 10) : 0;
       if (currentIndex >= sentences.length) currentIndex = 0;
@@ -180,7 +185,7 @@
 
     } catch (err) {
       console.error(err);
-      contentEl.innerText = "PDF açılırken hata oluştu: " + err.message;
+      contentEl.innerText = "Hata oluştu: " + err.message;
     }
   });
 
@@ -223,8 +228,17 @@
     }
 
     synth.cancel();
-    utterance = new SpeechSynthesisUtterance(sentences[currentIndex]);
+
+    // Türkçe karakterlerin ses motoruna doğru iletilmesi için temiz metin
+    const textToSpeak = sentences[currentIndex].normalize('NFC');
+    utterance = new SpeechSynthesisUtterance(textToSpeak);
     utterance.lang = 'tr-TR';
+
+    // Eğer tarayıcıda tanımlı Türkçe ses motoru bulunduysa ata
+    if (turkishVoice) {
+      utterance.voice = turkishVoice;
+    }
+
     utterance.rate = 1.0;
 
     utterance.onend = () => {
