@@ -101,6 +101,9 @@
   </div>
 </div>
 
+<!-- Harici ses motoru için HTML5 Audio Oynatıcı -->
+<audio id="audioPlayer" preload="auto"></audio>
+
 <script>
   if (window['pdfjs-dist/build/pdf']) {
     window.pdfjsLib = window['pdfjs-dist/build/pdf'];
@@ -113,20 +116,8 @@
   let sentences = [];
   let currentIndex = 0;
   let isPlaying = false;
-  const synth = window.speechSynthesis;
-  let utterance = null;
-  let turkishVoice = null;
 
-  // Cihazdaki Türkçe ses motorunu tespit et ve seç
-  function loadVoices() {
-    const voices = synth.getVoices();
-    turkishVoice = voices.find(v => v.lang.includes('tr') || v.lang.includes('TR'));
-  }
-  loadVoices();
-  if (speechSynthesis.onvoiceschanged !== undefined) {
-    speechSynthesis.onvoiceschanged = loadVoices;
-  }
-
+  const audioPlayer = document.getElementById('audioPlayer');
   const filePicker = document.getElementById('filePicker');
   const contentEl = document.getElementById('content');
   const playBtn = document.getElementById('playBtn');
@@ -147,7 +138,6 @@
     try {
       const arrayBuffer = await file.arrayBuffer();
       const typedarray = new Uint8Array(arrayBuffer);
-
       const loadingTask = pdfjsLib.getDocument({ data: typedarray });
       const pdf = await loadingTask.promise;
 
@@ -157,142 +147,3 @@
       for (let i = 1; i <= totalPages; i++) {
         contentEl.innerText = `Sayfa işleniyor: ${i} / ${totalPages}...`;
         const page = await pdf.getPage(i);
-        const textContent = await page.getTextContent();
-        const pageText = textContent.items.map(item => item.str).join(' ');
-        extractedText += pageText + "\n";
-      }
-
-      // Metni Unicode standartlarına göre düzelt ve temizle
-      extractedText = extractedText.normalize('NFC');
-
-      if (!extractedText.trim()) {
-        contentEl.innerText = "HATA: Okunabilir metin bulunamadı.";
-        return;
-      }
-
-      sentences = extractedText
-        .replace(/([.?!])\s*(?=[A-ZĞÜŞİÖÇa-zğüşıöç0-9])/g, "$1|")
-        .split("|")
-        .map(s => s.trim())
-        .filter(s => s.length > 2);
-
-      const savedIndex = localStorage.getItem('progress_' + currentBookId);
-      currentIndex = savedIndex ? parseInt(savedIndex, 10) : 0;
-      if (currentIndex >= sentences.length) currentIndex = 0;
-
-      renderContent();
-      updateUI();
-
-    } catch (err) {
-      console.error(err);
-      contentEl.innerText = "Hata oluştu: " + err.message;
-    }
-  });
-
-  function renderContent() {
-    contentEl.innerHTML = '';
-    const fragment = document.createDocumentFragment();
-    sentences.forEach((sentence, idx) => {
-      const span = document.createElement('span');
-      span.id = `sent-${idx}`;
-      span.innerText = sentence + ' ';
-      fragment.appendChild(span);
-    });
-    contentEl.appendChild(fragment);
-    highlightCurrent();
-  }
-
-  function highlightCurrent() {
-    document.querySelectorAll('.active-sentence').forEach(el => el.classList.remove('active-sentence'));
-    const currentEl = document.getElementById(`sent-${currentIndex}`);
-    if (currentEl) {
-      currentEl.classList.add('active-sentence');
-      currentEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-    progressStatusEl.innerText = `Cümle: ${currentIndex + 1} / ${sentences.length}`;
-    localStorage.setItem('progress_' + currentBookId, currentIndex);
-  }
-
-  function updateUI() {
-    const hasData = sentences.length > 0;
-    playBtn.disabled = !hasData;
-    prevBtn.disabled = !hasData;
-    nextBtn.disabled = !hasData;
-    playBtn.innerText = isPlaying ? "Durdur" : "Başlat";
-  }
-
-  function playCurrent() {
-    if (currentIndex >= sentences.length) {
-      stopAudio();
-      return;
-    }
-
-    synth.cancel();
-
-    // Türkçe karakterlerin ses motoruna doğru iletilmesi için temiz metin
-    const textToSpeak = sentences[currentIndex].normalize('NFC');
-    utterance = new SpeechSynthesisUtterance(textToSpeak);
-    utterance.lang = 'tr-TR';
-
-    // Eğer tarayıcıda tanımlı Türkçe ses motoru bulunduysa ata
-    if (turkishVoice) {
-      utterance.voice = turkishVoice;
-    }
-
-    utterance.rate = 1.0;
-
-    utterance.onend = () => {
-      if (isPlaying) {
-        currentIndex++;
-        if (currentIndex < sentences.length) {
-          highlightCurrent();
-          playCurrent();
-        } else {
-          stopAudio();
-        }
-      }
-    };
-
-    utterance.onerror = () => {
-      stopAudio();
-    };
-
-    highlightCurrent();
-    synth.speak(utterance);
-    isPlaying = true;
-    updateUI();
-  }
-
-  function stopAudio() {
-    synth.cancel();
-    isPlaying = false;
-    updateUI();
-  }
-
-  playBtn.addEventListener('click', () => {
-    if (isPlaying) {
-      stopAudio();
-    } else {
-      playCurrent();
-    }
-  });
-
-  prevBtn.addEventListener('click', () => {
-    if (currentIndex > 0) {
-      currentIndex--;
-      highlightCurrent();
-      if (isPlaying) playCurrent();
-    }
-  });
-
-  nextBtn.addEventListener('click', () => {
-    if (currentIndex < sentences.length - 1) {
-      currentIndex++;
-      highlightCurrent();
-      if (isPlaying) playCurrent();
-    }
-  });
-</script>
-
-</body>
-</html>
