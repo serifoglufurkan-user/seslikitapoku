@@ -4,7 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Sesli Kitap</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- PDF.js kütüphanesi -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+  <!-- EPUB kütüphaneleri -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
   <style>
@@ -45,7 +47,7 @@
       white-space: pre-wrap;
     }
     .active-sentence {
-      background-color: rgba(0, 122, 255, 0.3);
+      background-color: rgba(0, 122, 255, 0.35);
       border-radius: 4px;
     }
     .controls {
@@ -89,7 +91,7 @@
   <div class="status" id="bookTitle">Dosya seçilmedi</div>
 </header>
 
-<main id="content">Kitap içeriği burada görünecektir.</main>
+<main id="content">Lütfen bir PDF veya EPUB dosyası seçin.</main>
 
 <div class="controls">
   <div class="status" id="progressStatus">Cümle: 0 / 0</div>
@@ -101,7 +103,9 @@
 </div>
 
 <script>
-  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  if (window.pdfjsLib) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+  }
 
   let currentBookId = '';
   let sentences = [];
@@ -125,28 +129,46 @@
     stopAudio();
     currentBookId = file.name;
     bookTitleEl.innerText = file.name;
-    contentEl.innerText = "Yükleniyor ve ayrıştırılıyor...";
+    contentEl.innerText = "Dosya okunuyor, lütfen bekleyin...";
 
-    let rawText = "";
-    if (file.name.endsWith('.pdf')) {
-      rawText = await parsePDF(file);
-    } else if (file.name.endsWith('.epub')) {
-      rawText = await parseEPUB(file);
+    try {
+      let rawText = "";
+      if (file.name.toLowerCase().endsWith('.pdf')) {
+        rawText = await parsePDF(file);
+      } else if (file.name.toLowerCase().endsWith('.epub')) {
+        rawText = await parseEPUB(file);
+      } else {
+        contentEl.innerText = "Lütfen sadece .pdf veya .epub uzantılı dosya seçin.";
+        return;
+      }
+
+      if (!rawText || rawText.trim().length === 0) {
+        contentEl.innerText = "Uyarı: Dosyadan metin okunamadı!\n\nBu PDF taranmış resimlerden (fotoğraflardan) oluşuyor olabilir. Uygulama yalnızca seçilebilir sayısal metin içeren belgeleri okuyabilir.";
+        return;
+      }
+
+      processText(rawText);
+    } catch (err) {
+      console.error(err);
+      contentEl.innerText = "Hata oluştu: " + err.message;
     }
-
-    processText(rawText);
   });
 
   async function parsePDF(file) {
     const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    let text = "";
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdf = await loadingTask.promise;
+    let fullText = "";
+
+    contentEl.innerText = `PDF ayrıştırılıyor (Toplam ${pdf.numPages} sayfa)...`;
+
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const content = await page.getTextContent();
-      text += content.items.map(item => item.str).join(' ') + '\n';
+      const pageStrings = content.items.map(item => item.str).join(' ');
+      fullText += pageStrings + '\n';
     }
-    return text;
+    return fullText;
   }
 
   async function parseEPUB(file) {
@@ -162,8 +184,13 @@
   }
 
   function processText(text) {
-    sentences = text.match(/[^.!?]+[.!?]+(\s|$)\vert{}[^.!?]+$/g) || [];
-    sentences = sentences.map(s => s.trim()).filter(s => s.length > 0);
+    sentences = text.match(/[^.!?\n]+[.!?\n]+|[^.!?\n]+$/g) || [];
+    sentences = sentences.map(s => s.trim()).filter(s => s.length > 1);
+
+    if (sentences.length === 0) {
+      contentEl.innerText = "Metin bulundu ancak cümlelere ayrılamadı.";
+      return;
+    }
 
     const savedIndex = localStorage.getItem('progress_' + currentBookId);
     currentIndex = savedIndex ? parseInt(savedIndex, 10) : 0;
