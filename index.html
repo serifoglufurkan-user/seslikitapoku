@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Sesli Kitap</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
+  <style>
+    :root {
+      --bg: #121212;
+      --card: #1e1e1e;
+      --text: #ffffff;
+      --accent: #007aff;
+      --muted: #8e8e93;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom) 16px;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      box-sizing: border-box;
+    }
+    header {
+      padding: 12px 0;
+      border-bottom: 1px solid #2c2c2e;
+    }
+    .file-input {
+      display: block;
+      width: 100%;
+      margin: 10px 0;
+      color: var(--muted);
+    }
+    #content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 0;
+      font-size: 17px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+    }
+    .active-sentence {
+      background-color: rgba(0, 122, 255, 0.3);
+      border-radius: 4px;
+    }
+    .controls {
+      background: var(--card);
+      border-radius: 14px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .btn-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    button {
+      flex: 1;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 12px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 16px;
+    }
+    button:disabled {
+      background: #3a3a3c;
+      color: var(--muted);
+    }
+    .status {
+      font-size: 13px;
+      color: var(--muted);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <input type="file" id="filePicker" class="file-input" accept=".pdf,.epub">
+  <div class="status" id="bookTitle">Dosya seçilmedi</div>
+</header>
+
+<main id="content">Kitap içeriği burada görünecektir.</main>
+
+<div class="controls">
+  <div class="status" id="progressStatus">Cümle: 0 / 0</div>
+  <div class="btn-row">
+    <button id="prevBtn" disabled>Önceki</button>
+    <button id="playBtn" disabled>Başlat</button>
+    <button id="nextBtn" disabled>Sonraki</button>
+  </div>
+</div>
+
+<script>
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  let currentBookId = '';
+  let sentences = [];
+  let currentIndex = 0;
+  let isPlaying = false;
+  const synth = window.speechSynthesis;
+  let utterance = null;
+
+  const filePicker = document.getElementById('filePicker');
+  const contentEl = document.getElementById('content');
+  const playBtn = document.getElementById('playBtn');
+  const prevBtn = document.getElementById('prevBtn');
+  const nextBtn = document.getElementById('nextBtn');
+  const bookTitleEl = document.getElementById('bookTitle');
+  const progressStatusEl = document.getElementById('progressStatus');
+
+  filePicker.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    stopAudio();
+    currentBookId = file.name;
+    bookTitleEl.innerText = file.name;
+    contentEl.innerText = "Yükleniyor ve ayrıştırılıyor...";
+
+    let rawText = "";
+    if (file.name.endsWith('.pdf')) {
+      rawText = await parsePDF(file);
+    } else if (file.name.endsWith('.epub')) {
+      rawText = await parseEPUB(file);
+    }
+
+    processText(rawText);
+  });
+
+  async function parsePDF(file) {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let text = "";
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      text += content.items.map(item => item.str).join(' ') + '\n';
+    }
+    return text;
+  }
+
+  async function parseEPUB(file) {
+    const arrayBuffer = await file.arrayBuffer();
+    const book = ePub(arrayBuffer);
+    await book.ready;
+    let text = "";
+    for (const item of book.spine.spineItems) {
+      const doc = await item.load(book.load.bind(book));
+      text += (doc.body ? doc.body.innerText : "") + "\n";
+    }
+    return text;
+  }
+
+  function processText(text) {
+    sentences = text.match(/[^.!?]+[.!?]+(\s|$)\vert{}[^.!?]+$/g) || [];
+    sentences = sentences.map(s => s.trim()).filter(s => s.length > 0);
+
+    const savedIndex = localStorage.getItem('progress_' + currentBookId);
+    currentIndex = savedIndex ? parseInt(savedIndex, 10) : 0;
+    if (currentIndex >= sentences.length) currentIndex = 0;
+
+    renderContent();
+    updateUI();
+  }
+
+  function renderContent() {
+    contentEl.innerHTML = '';
+    sentences.forEach((sentence, idx) => {
+      const span = document.createElement('span');
+      span.id = `sent-${idx}`;
+      span.innerText = sentence + ' ';
+      contentEl.appendChild(span);
+    });
+    highlightCurrent();
+  }
+
+  function highlightCurrent() {
+    document.querySelectorAll('.active-sentence').forEach(el => el.classList.remove('active-sentence'));
+    const currentEl = document.getElementById(`sent-${currentIndex}`);
+    if (currentEl) {
+      currentEl.classList.add('active-sentence');
+      currentEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    progressStatusEl.innerText = `Cümle: ${currentIndex + 1} / ${sentences.length}`;
+    localStorage.setItem('progress_' + currentBookId, currentIndex);
+  }
+
+  function updateUI() {
+    const hasData = sentences.length > 0;
+    playBtn.disabled = !hasData;
+    prevBtn.disabled = !hasData;
+    nextBtn.disabled = !hasData;
+    playBtn.innerText = isPlaying ? "Durdur" : "Başlat";
+  }
+
+  function playCurrent() {
+    if (currentIndex >= sentences.length) {
+      stopAudio();
+      return;
+    }
+
+    synth.cancel();
+    utterance = new SpeechSynthesisUtterance(sentences[currentIndex]);
+    utterance.lang = 'tr-TR';
+    utterance.rate = 1.0;
+
+    utterance.onend = () => {
+      if (isPlaying) {
+        currentIndex++;
+        if (currentIndex < sentences.length) {
+          highlightCurrent();
+          playCurrent();
+        } else {
+          stopAudio();
+        }
+      }
+    };
+
+    utterance.onerror = () => {
+      stopAudio();
+    };
+
+    highlightCurrent();
+    synth.speak(utterance);
+    isPlaying = true;
+    updateUI();
+  }
+
+  function stopAudio() {
+    synth.cancel();
+    isPlaying = false;
+    updateUI();
+  }
+
+  playBtn.addEventListener('click', () => {
+    if (isPlaying) {
+      stopAudio();
+    } else {
+      playCurrent();
+    }
+  });
+
+  prevBtn.addEventListener('click', () => {
+    if (currentIndex > 0) {
+      currentIndex--;
+      highlightCurrent();
+      if (isPlaying) playCurrent();
+    }
+  });
+
+  nextBtn.addEventListener('click', () => {
+    if (currentIndex < sentences.length - 1) {
+      currentIndex++;
+      highlightCurrent();
+      if (isPlaying) playCurrent();
+    }
+  });
+</script>
+
+</body>
+</html>
