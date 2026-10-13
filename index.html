@@ -4,11 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Sesli Kitap</title>
-  <!-- PDF.js kütüphanesi -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
-  <!-- EPUB kütüphaneleri -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
+  <!-- Kararlı ve bağımsız PDF.js sürümü -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
   <style>
     :root {
       --bg: #121212;
@@ -22,20 +19,20 @@
       background: var(--bg);
       color: var(--text);
       margin: 0;
-      padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom) 16px;
+      padding: 16px;
       display: flex;
       flex-direction: column;
       height: 100vh;
       box-sizing: border-box;
     }
     header {
-      padding: 12px 0;
+      padding-bottom: 12px;
       border-bottom: 1px solid #2c2c2e;
     }
     .file-input {
       display: block;
       width: 100%;
-      margin: 10px 0;
+      margin-bottom: 8px;
       color: var(--muted);
     }
     #content {
@@ -47,8 +44,9 @@
       white-space: pre-wrap;
     }
     .active-sentence {
-      background-color: rgba(0, 122, 255, 0.35);
+      background-color: rgba(0, 122, 255, 0.4);
       border-radius: 4px;
+      padding: 2px 4px;
     }
     .controls {
       background: var(--card);
@@ -68,14 +66,16 @@
       background: var(--accent);
       color: #fff;
       border: none;
-      padding: 12px;
+      padding: 14px;
       border-radius: 8px;
       font-weight: 600;
       font-size: 16px;
+      cursor: pointer;
     }
     button:disabled {
       background: #3a3a3c;
       color: var(--muted);
+      cursor: not-allowed;
     }
     .status {
       font-size: 13px;
@@ -87,11 +87,11 @@
 <body>
 
 <header>
-  <input type="file" id="filePicker" class="file-input" accept=".pdf,.epub">
-  <div class="status" id="bookTitle">Dosya seçilmedi</div>
+  <input type="file" id="filePicker" class="file-input" accept=".pdf">
+  <div class="status" id="bookTitle">Lütfen bir PDF seçin</div>
 </header>
 
-<main id="content">Lütfen bir PDF veya EPUB dosyası seçin.</main>
+<main id="content">PDF seçildiğinde metin buraya aktarılacaktır.</main>
 
 <div class="controls">
   <div class="status" id="progressStatus">Cümle: 0 / 0</div>
@@ -103,8 +103,12 @@
 </div>
 
 <script>
+  // Worker yükleme hatalarını önlemek için worker yolunu doğrudan kütüphaneden bağlayalım
+  if (window['pdfjs-dist/build/pdf']) {
+    window.pdfjsLib = window['pdfjs-dist/build/pdf'];
+  }
   if (window.pdfjsLib) {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js';
   }
 
   let currentBookId = '';
@@ -129,85 +133,67 @@
     stopAudio();
     currentBookId = file.name;
     bookTitleEl.innerText = file.name;
-    contentEl.innerText = "Dosya okunuyor, lütfen bekleyin...";
+    contentEl.innerText = "PDF okunuyor, lütfen bekleyin...";
 
     try {
-      let rawText = "";
-      if (file.name.toLowerCase().endsWith('.pdf')) {
-        rawText = await parsePDF(file);
-      } else if (file.name.toLowerCase().endsWith('.epub')) {
-        rawText = await parseEPUB(file);
-      } else {
-        contentEl.innerText = "Lütfen sadece .pdf veya .epub uzantılı dosya seçin.";
+      const arrayBuffer = await file.arrayBuffer();
+      const typedarray = new Uint8Array(arrayBuffer);
+
+      const loadingTask = pdfjsLib.getDocument({ data: typedarray });
+      const pdf = await loadingTask.promise;
+
+      let extractedText = "";
+      const totalPages = pdf.numPages;
+
+      for (let i = 1; i <= totalPages; i++) {
+        contentEl.innerText = `Sayfa işleniyor: ${i} / ${totalPages}...`;
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map(item => item.str).join(' ');
+        extractedText += pageText + "\n";
+      }
+
+      if (!extractedText.trim()) {
+        contentEl.innerText = "HATA: Bu PDF belgesinde okunabilir metin bulunamadı. Belge taranmış resimlerden (fotoğraflardan) oluşuyor olabilir.";
         return;
       }
 
-      if (!rawText || rawText.trim().length === 0) {
-        contentEl.innerText = "Uyarı: Dosyadan metin okunamadı!\n\nBu PDF taranmış resimlerden (fotoğraflardan) oluşuyor olabilir. Uygulama yalnızca seçilebilir sayısal metin içeren belgeleri okuyabilir.";
+      // Cümlelere bölme işlemi
+      sentences = extractedText
+        .replace(/([.?!])\s*(?=[A-ZĞÜŞİÖÇa-zğüşıöç0-9])/g, "$1|")
+        .split("|")
+        .map(s => s.trim())
+        .filter(s => s.length > 2);
+
+      if (sentences.length === 0) {
+        contentEl.innerText = "Metin bulundu fakat cümleler ayrıştırılamadı.";
         return;
       }
 
-      processText(rawText);
+      // Kaldığı yeri hafızadan al
+      const savedIndex = localStorage.getItem('progress_' + currentBookId);
+      currentIndex = savedIndex ? parseInt(savedIndex, 10) : 0;
+      if (currentIndex >= sentences.length) currentIndex = 0;
+
+      renderContent();
+      updateUI();
+
     } catch (err) {
       console.error(err);
-      contentEl.innerText = "Hata oluştu: " + err.message;
+      contentEl.innerText = "PDF açılırken hata oluştu: " + err.message;
     }
   });
 
-  async function parsePDF(file) {
-    const arrayBuffer = await file.arrayBuffer();
-    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-    const pdf = await loadingTask.promise;
-    let fullText = "";
-
-    contentEl.innerText = `PDF ayrıştırılıyor (Toplam ${pdf.numPages} sayfa)...`;
-
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      const pageStrings = content.items.map(item => item.str).join(' ');
-      fullText += pageStrings + '\n';
-    }
-    return fullText;
-  }
-
-  async function parseEPUB(file) {
-    const arrayBuffer = await file.arrayBuffer();
-    const book = ePub(arrayBuffer);
-    await book.ready;
-    let text = "";
-    for (const item of book.spine.spineItems) {
-      const doc = await item.load(book.load.bind(book));
-      text += (doc.body ? doc.body.innerText : "") + "\n";
-    }
-    return text;
-  }
-
-  function processText(text) {
-    sentences = text.match(/[^.!?\n]+[.!?\n]+|[^.!?\n]+$/g) || [];
-    sentences = sentences.map(s => s.trim()).filter(s => s.length > 1);
-
-    if (sentences.length === 0) {
-      contentEl.innerText = "Metin bulundu ancak cümlelere ayrılamadı.";
-      return;
-    }
-
-    const savedIndex = localStorage.getItem('progress_' + currentBookId);
-    currentIndex = savedIndex ? parseInt(savedIndex, 10) : 0;
-    if (currentIndex >= sentences.length) currentIndex = 0;
-
-    renderContent();
-    updateUI();
-  }
-
   function renderContent() {
     contentEl.innerHTML = '';
+    const fragment = document.createDocumentFragment();
     sentences.forEach((sentence, idx) => {
       const span = document.createElement('span');
       span.id = `sent-${idx}`;
       span.innerText = sentence + ' ';
-      contentEl.appendChild(span);
+      fragment.appendChild(span);
     });
+    contentEl.appendChild(fragment);
     highlightCurrent();
   }
 
