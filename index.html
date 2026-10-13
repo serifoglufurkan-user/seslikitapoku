@@ -4,11 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Sesli Kitap</title>
-  <!-- PDF Kütüphanesi -->
+  <!-- PDF.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
-  <!-- EPUB Kütüphaneleri -->
+  <!-- JSZip (EPUB açmak için en hızlı ve kararlı yöntem) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
   <style>
     :root {
       --bg: #121212;
@@ -140,21 +139,21 @@
 
     try {
       let extractedText = "";
-      const lowerName = file.name.toLowerCase();
+      const fileNameLower = file.name.toLowerCase();
 
-      if (lowerName.endsWith('.pdf')) {
-        extractedText = await parsePDF(file);
-      } else if (lowerName.endsWith('.epub')) {
+      if (fileNameLower.endsWith('.epub')) {
         extractedText = await parseEPUB(file);
+      } else if (fileNameLower.endsWith('.pdf')) {
+        extractedText = await parsePDF(file);
       } else {
-        contentEl.innerText = "Lütfen sadece .pdf veya .epub uzantılı bir dosya seçin.";
+        contentEl.innerText = "Hata: Yalnızca .pdf veya .epub formatları desteklenmektedir.";
         return;
       }
 
       extractedText = extractedText.normalize('NFC');
 
       if (!extractedText.trim()) {
-        contentEl.innerText = "HATA: Dosyada okunabilir metin bulunamadı.";
+        contentEl.innerText = "HATA: Dosyadan metin okunamadı.";
         return;
       }
 
@@ -177,6 +176,44 @@
     }
   });
 
+  // Doğrudan JSZip ile HTML/XHTML bölümlerini çıkarma (Hatayı tamamen çözer)
+  async function parseEPUB(file) {
+    contentEl.innerText = "EPUB arşivi açılıyor...";
+    const zip = await JSZip.loadAsync(file);
+    let fullText = "";
+    
+    // EPUB içerisindeki metin dosyalarını bul (.html veya .xhtml)
+    const textFiles = [];
+    zip.forEach((relativePath, zipEntry) => {
+      const lower = relativePath.toLowerCase();
+      if ((lower.endsWith('.html') || lower.endsWith('.xhtml') || lower.endsWith('.htm')) && !lower.includes('toc')) {
+        textFiles.push(zipEntry);
+      }
+    });
+
+    // Dosyaları isimlerine göre sırala
+    textFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+
+    for (let i = 0; i < textFiles.length; i++) {
+      contentEl.innerText = `EPUB okunuyor: ${i + 1} / ${textFiles.length}...`;
+      const htmlStr = await textFiles[i].async("string");
+      
+      // HTML etiketlerini temizle
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(htmlStr, 'text/html');
+      
+      // script ve style etiketlerini kaldır
+      doc.querySelectorAll('script, style').forEach(el => el.remove());
+      
+      const cleanText = doc.body ? (doc.body.innerText || doc.body.textContent) : "";
+      if (cleanText) {
+        fullText += cleanText + "\n";
+      }
+    }
+
+    return fullText;
+  }
+
   async function parsePDF(file) {
     const arrayBuffer = await file.arrayBuffer();
     const typedarray = new Uint8Array(arrayBuffer);
@@ -192,29 +229,6 @@
       const textContent = await page.getTextContent();
       const pageText = textContent.items.map(item => item.str).join(' ');
       fullText += pageText + "\n";
-    }
-    return fullText;
-  }
-
-  async function parseEPUB(file) {
-    contentEl.innerText = "EPUB bölümleri okunuyor...";
-    const arrayBuffer = await file.arrayBuffer();
-    const book = ePub(arrayBuffer);
-    await book.ready;
-
-    let fullText = "";
-    const spineItems = book.spine.spineItems;
-
-    for (let i = 0; i < spineItems.length; i++) {
-      contentEl.innerText = `EPUB Bölüm işleniyor: ${i + 1} / ${spineItems.length}...`;
-      try {
-        const doc = await spineItems[i].load(book.load.bind(book));
-        if (doc && doc.body) {
-          fullText += doc.body.innerText + "\n";
-        }
-      } catch (err) {
-        console.warn("Bölüm atlandı:", err);
-      }
     }
     return fullText;
   }
@@ -267,7 +281,7 @@
       isPlaying = true;
       updateUI();
     }).catch(err => {
-      console.warn("Harici motor çalınamadı, yerel motor deneniyor:", err);
+      console.warn("Harici motor çalınamadı, yerel deneniyor:", err);
       fallbackSpeak(currentSentence);
     });
   }
